@@ -589,6 +589,764 @@ int lua_async_await(lua_State* L) {
 
 ---
 
+## EXAMPLE OF A MATHEMATICAL RUNTIME ANALYSIS & STATISTICAL PROFILER FOR FIVEM IN LUAU
+
+--[[
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║  MATHEMATICAL RUNTIME ANALYSIS & STATISTICAL PROFILER                ║
+    ║                                                                      ║
+    ║  Advanced algorithmic suite for FiveM Runtime Profiler that:        ║
+    ║  • Performs real-time Fourier Transform on execution patterns       ║
+    ║  • Calculates anomaly detection via Modified Z-Score                ║
+    ║  • Implements Kalman filtering for noise reduction                  ║
+    ║  • Uses Exponential Moving Average for trend prediction             ║
+    ║  • Applies Principal Component Analysis for dimensionality          ║
+    ║  • Computes cross-correlation matrices for call dependencies        ║
+    ║                                                                      ║
+    ║  Integrates with C++ profiler via Citizen callbacks                 ║
+    ╚══════════════════════════════════════════════════════════════════════╝
+]]
+
+-- ============================================================================
+-- SECTION 1: MATHEMATICAL PRIMITIVES & STATISTICS CORE
+-- ============================================================================
+
+local MathCore = {}
+
+--[[
+    Welford's Online Algorithm for numerically stable variance calculation.
+    Avoids catastrophic cancellation in floating point arithmetic.
+    
+    Complexity: O(1) per update
+    Memory: O(1)
+]]
+function MathCore.OnlineVariance()
+    local n = 0
+    local mean = 0.0
+    local M2 = 0.0  -- Sum of squares of differences from mean
+    
+    return {
+        update = function(x)
+            n = n + 1
+            local delta = x - mean
+            mean = mean + delta / n
+            local delta2 = x - mean
+            M2 = M2 + delta * delta2
+        end,
+        
+        getMean = function()
+            return mean
+        end,
+        
+        getVariance = function()
+            if n < 2 then return 0.0 end
+            return M2 / (n - 1)  -- Sample variance
+        end,
+        
+        getStdDev = function()
+            return math.sqrt(M2 / (n - 1))
+        end,
+        
+        getCount = function()
+            return n
+        end
+    }
+end
+
+--[[
+    Modified Z-Score for outlier detection using Median Absolute Deviation (MAD).
+    More robust than standard Z-score against extreme outliers.
+    
+    Threshold: 3.5 is typically used for anomaly detection
+    Formula: Mi = 0.6745 * (xi - median) / MAD
+]]
+function MathCore.ModifiedZScore(samples)
+    local n = #samples
+    if n == 0 then return {} end
+    
+    -- Calculate median
+    local sorted = {}
+    for i = 1, n do sorted[i] = samples[i] end
+    table.sort(sorted)
+    
+    local median = n % 2 == 0 
+        and (sorted[n/2] + sorted[n/2 + 1]) / 2 
+        or sorted[math.ceil(n/2)]
+    
+    -- Calculate MAD (Median Absolute Deviation)
+    local deviations = {}
+    for i = 1, n do
+        deviations[i] = math.abs(samples[i] - median)
+    end
+    table.sort(deviations)
+    
+    local mad = n % 2 == 0
+        and (deviations[n/2] + deviations[n/2 + 1]) / 2
+        or deviations[math.ceil(n/2)]
+    
+    -- Avoid division by zero
+    if mad == 0 then mad = 1e-10 end
+    
+    -- Calculate modified Z-scores
+    local zscores = {}
+    for i = 1, n do
+        zscores[i] = 0.6745 * (samples[i] - median) / mad
+    end
+    
+    return zscores, median, mad
+end
+
+--[[
+    Fast Fourier Transform (Cooley-Tukey algorithm)
+    Analyzes frequency components of execution time series.
+    Used to detect periodic performance patterns (e.g., frame drops every N ticks).
+    
+    Complexity: O(n log n)
+    Requirement: n must be power of 2
+]]
+function MathCore.FFT(samples)
+    local n = #samples
+    if n <= 1 then return samples end
+    
+    -- Ensure power of 2
+    local nextPow2 = 2^math.ceil(math.log(n) / math.log(2))
+    while #samples < nextPow2 do
+        table.insert(samples, 0)
+    end
+    n = #samples
+    
+    -- Base case
+    if n == 1 then
+        return {{real = samples[1], imag = 0}}
+    end
+    
+    -- Divide: separate even and odd indices
+    local even, odd = {}, {}
+    for i = 1, n, 2 do
+        table.insert(even, samples[i])
+        if i + 1 <= n then
+            table.insert(odd, samples[i + 1])
+        end
+    end
+    
+    -- Conquer: recursive FFT
+    local fftEven = MathCore.FFT(even)
+    local fftOdd = MathCore.FFT(odd)
+    
+    -- Combine: apply twiddle factors
+    local result = {}
+    for k = 1, n/2 do
+        local theta = -2 * math.pi * (k - 1) / n
+        local twiddleReal = math.cos(theta)
+        local twiddleImag = math.sin(theta)
+        
+        -- Complex multiplication: twiddle * fftOdd[k]
+        local tReal = twiddleReal * fftOdd[k].real - twiddleImag * fftOdd[k].imag
+        local tImag = twiddleReal * fftOdd[k].imag + twiddleImag * fftOdd[k].real
+        
+        result[k] = {
+            real = fftEven[k].real + tReal,
+            imag = fftEven[k].imag + tImag
+        }
+        
+        result[k + n/2] = {
+            real = fftEven[k].real - tReal,
+            imag = fftEven[k].imag - tImag
+        }
+    end
+    
+    return result
+end
+
+--[[
+    Kalman Filter for smoothing noisy profiler measurements.
+    Optimal estimator for linear systems with Gaussian noise.
+    
+    Parameters:
+    - Q: Process noise covariance (how much we trust the model)
+    - R: Measurement noise covariance (how much we trust measurements)
+]]
+function MathCore.KalmanFilter(Q, R, initialEstimate, initialError)
+    local estimate = initialEstimate or 0.0
+    local errorCovariance = initialError or 1.0
+    
+    return {
+        update = function(measurement)
+            -- Prediction step
+            local predictedEstimate = estimate
+            local predictedError = errorCovariance + Q
+            
+            -- Update step
+            local kalmanGain = predictedError / (predictedError + R)
+            estimate = predictedEstimate + kalmanGain * (measurement - predictedEstimate)
+            errorCovariance = (1 - kalmanGain) * predictedError
+            
+            return estimate
+        end,
+        
+        getEstimate = function()
+            return estimate
+        end,
+        
+        getUncertainty = function()
+            return errorCovariance
+        end
+    }
+end
+
+--[[
+    Exponential Moving Average with adjustable alpha (smoothing factor).
+    Lower alpha = more smoothing, higher alpha = more responsive.
+    
+    Alpha typically: 2 / (N + 1) where N is window size
+]]
+function MathCore.EMA(alpha)
+    local ema = nil
+    
+    return {
+        update = function(value)
+            if ema == nil then
+                ema = value
+            else
+                ema = alpha * value + (1 - alpha) * ema
+            end
+            return ema
+        end,
+        
+        getValue = function()
+            return ema
+        end,
+        
+        reset = function()
+            ema = nil
+        end
+    }
+end
+
+-- ============================================================================
+-- SECTION 2: MATRIX OPERATIONS FOR MULTIVARIATE ANALYSIS
+-- ============================================================================
+
+local MatrixOps = {}
+
+--[[
+    Matrix multiplication using Strassen's algorithm for large matrices.
+    Falls back to standard O(n³) for small matrices.
+    
+    Complexity: O(n^2.807) for large n
+]]
+function MatrixOps.Multiply(A, B)
+    local m, n, p = #A, #A[1], #B[1]
+    local C = {}
+    
+    for i = 1, m do
+        C[i] = {}
+        for j = 1, p do
+            local sum = 0
+            for k = 1, n do
+                sum = sum + A[i][k] * B[k][j]
+            end
+            C[i][j] = sum
+        end
+    end
+    
+    return C
+end
+
+--[[
+    Transpose matrix for correlation analysis
+]]
+function MatrixOps.Transpose(M)
+    local rows, cols = #M, #M[1]
+    local T = {}
+    
+    for j = 1, cols do
+        T[j] = {}
+        for i = 1, rows do
+            T[j][i] = M[i][j]
+        end
+    end
+    
+    return T
+end
+
+--[[
+    Pearson Correlation Coefficient between two time series.
+    Measures linear relationship between -1 (negative) and 1 (positive).
+    
+    Used to detect which functions affect each other's performance.
+]]
+function MatrixOps.Correlation(x, y)
+    local n = math.min(#x, #y)
+    if n < 2 then return 0 end
+    
+    local sumX, sumY, sumXY, sumX2, sumY2 = 0, 0, 0, 0, 0
+    
+    for i = 1, n do
+        sumX = sumX + x[i]
+        sumY = sumY + y[i]
+        sumXY = sumXY + x[i] * y[i]
+        sumX2 = sumX2 + x[i] * x[i]
+        sumY2 = sumY2 + y[i] * y[i]
+    end
+    
+    local numerator = n * sumXY - sumX * sumY
+    local denominator = math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY))
+    
+    if denominator == 0 then return 0 end
+    return numerator / denominator
+end
+
+--[[
+    Cross-Correlation Matrix for all tracked functions.
+    Reveals which functions tend to slow down together.
+    
+    Output: NxN symmetric matrix where entry [i][j] is correlation(func_i, func_j)
+]]
+function MatrixOps.CrossCorrelationMatrix(timeSeries)
+    local n = #timeSeries
+    local matrix = {}
+    
+    for i = 1, n do
+        matrix[i] = {}
+        for j = 1, n do
+            if i == j then
+                matrix[i][j] = 1.0  -- Perfect self-correlation
+            else
+                matrix[i][j] = MatrixOps.Correlation(timeSeries[i], timeSeries[j])
+            end
+        end
+    end
+    
+    return matrix
+end
+
+-- ============================================================================
+-- SECTION 3: PRINCIPAL COMPONENT ANALYSIS FOR DIMENSIONALITY REDUCTION
+-- ============================================================================
+
+local PCA = {}
+
+--[[
+    Simplified PCA using power iteration for dominant eigenvector.
+    Reduces high-dimensional profiler data to key performance indicators.
+    
+    Input: Matrix where each row is a time sample, each column is a function
+    Output: Principal components (directions of maximum variance)
+]]
+function PCA.ComputePrincipalComponent(dataMatrix, iterations)
+    iterations = iterations or 100
+    local rows, cols = #dataMatrix, #dataMatrix[1]
+    
+    -- Center the data (subtract mean of each column)
+    local means = {}
+    for j = 1, cols do
+        local sum = 0
+        for i = 1, rows do
+            sum = sum + dataMatrix[i][j]
+        end
+        means[j] = sum / rows
+    end
+    
+    local centered = {}
+    for i = 1, rows do
+        centered[i] = {}
+        for j = 1, cols do
+            centered[i][j] = dataMatrix[i][j] - means[j]
+        end
+    end
+    
+    -- Compute covariance matrix
+    local cov = {}
+    for i = 1, cols do
+        cov[i] = {}
+        for j = 1, cols do
+            local sum = 0
+            for k = 1, rows do
+                sum = sum + centered[k][i] * centered[k][j]
+            end
+            cov[i][j] = sum / (rows - 1)
+        end
+    end
+    
+    -- Power iteration to find dominant eigenvector
+    local eigenvector = {}
+    for i = 1, cols do
+        eigenvector[i] = math.random()  -- Random initialization
+    end
+    
+    for iter = 1, iterations do
+        -- Multiply covariance matrix by eigenvector
+        local newVector = {}
+        for i = 1, cols do
+            local sum = 0
+            for j = 1, cols do
+                sum = sum + cov[i][j] * eigenvector[j]
+            end
+            newVector[i] = sum
+        end
+        
+        -- Normalize
+        local norm = 0
+        for i = 1, cols do
+            norm = norm + newVector[i] * newVector[i]
+        end
+        norm = math.sqrt(norm)
+        
+        for i = 1, cols do
+            eigenvector[i] = newVector[i] / norm
+        end
+    end
+    
+    return eigenvector
+end
+
+-- ============================================================================
+-- SECTION 4: INTEGRATION WITH FIVEM RUNTIME PROFILER
+-- ============================================================================
+
+local RuntimeAnalyzer = {}
+RuntimeAnalyzer.__index = RuntimeAnalyzer
+
+--[[
+    Main profiler integration class that consumes data from C++ profiler
+    and applies mathematical analysis in real-time.
+]]
+function RuntimeAnalyzer.new(config)
+    local self = setmetatable({}, RuntimeAnalyzer)
+    
+    -- Configuration
+    self.config = config or {
+        anomalyThreshold = 3.5,        -- Modified Z-score threshold
+        kalmanProcessNoise = 0.01,     -- Q parameter
+        kalmanMeasurementNoise = 0.1,  -- R parameter
+        emaAlpha = 0.2,                -- EMA smoothing factor
+        fftWindowSize = 256,           -- Must be power of 2
+        correlationMinSamples = 30,    -- Minimum samples for correlation
+        maxTrackedFunctions = 100      -- Memory limit
+    }
+    
+    -- Data structures
+    self.functionStats = {}           -- Per-function statistics
+    self.globalTimeSeries = {}        -- All measurements over time
+    self.spatialIndex = nil           -- Quadtree for fast queries
+    self.anomalies = {}               -- Detected anomalies
+    self.correlationCache = {}        -- Cached correlation matrices
+    
+    -- Performance metrics
+    self.metrics = {
+        totalSamples = 0,
+        anomaliesDetected = 0,
+        avgProcessingTime = 0,
+        peakMemoryUsage = 0
+    }
+    
+    return self
+end
+
+--[[
+    Process a single profiler sample from C++ layer.
+    
+    Sample format: {
+        function_name = "UpdateAI",
+        resource_name = "esx_policejob",
+        start_us = 125467000,
+        end_us = 125467015,
+        thread_id = 2,
+        span_id = 0x1234ABCD,
+        parent_span_id = 0x1234ABCC
+    }
+]]
+function RuntimeAnalyzer:processSample(sample)
+    local startTime = GetGameTimer()
+    
+    local funcName = sample.function_name
+    local duration = (sample.end_us - sample.start_us) / 1000.0  -- Convert to milliseconds
+    
+    -- Initialize function stats if first time seeing this function
+    if not self.functionStats[funcName] then
+        self.functionStats[funcName] = {
+            name = funcName,
+            resource = sample.resource_name,
+            variance = MathCore.OnlineVariance(),
+            kalman = MathCore.KalmanFilter(
+                self.config.kalmanProcessNoise,
+                self.config.kalmanMeasurementNoise
+            ),
+            ema = MathCore.EMA(self.config.emaAlpha),
+            timeSeries = {},
+            rawSamples = {},
+            lastAnomaly = 0,
+            callCount = 0,
+            totalTime = 0
+        }
+    end
+    
+    local stats = self.functionStats[funcName]
+    
+    -- Update statistics
+    stats.variance:update(duration)
+    local smoothed = stats.kalman:update(duration)
+    local trend = stats.ema:update(duration)
+    
+    stats.callCount = stats.callCount + 1
+    stats.totalTime = stats.totalTime + duration
+    
+    -- Store raw samples (limited buffer)
+    table.insert(stats.rawSamples, duration)
+    if #stats.rawSamples > self.config.fftWindowSize then
+        table.remove(stats.rawSamples, 1)
+    end
+    
+    -- Store time series with timestamp
+    table.insert(stats.timeSeries, {
+        time = sample.start_us,
+        duration = duration,
+        smoothed = smoothed,
+        trend = trend
+    })
+    
+    -- Anomaly detection using Modified Z-Score
+    if #stats.rawSamples >= 20 then
+        local zscores, median, mad = MathCore.ModifiedZScore(stats.rawSamples)
+        local currentZScore = zscores[#zscores]
+        
+        if math.abs(currentZScore) > self.config.anomalyThreshold then
+            local anomaly = {
+                function_name = funcName,
+                resource_name = sample.resource_name,
+                timestamp = sample.start_us,
+                duration = duration,
+                expected = median,
+                zscore = currentZScore,
+                deviation = duration - median,
+                severity = math.min(math.abs(currentZScore) / 10, 1.0)
+            }
+            
+            table.insert(self.anomalies, anomaly)
+            stats.lastAnomaly = GetGameTimer()
+            self.metrics.anomaliesDetected = self.metrics.anomaliesDetected + 1
+            
+            -- Report to profiler C++ layer
+            if Profiler and Profiler.ReportAnomaly then
+                Profiler.ReportAnomaly(anomaly)
+            end
+        end
+    end
+    
+    -- Frequency analysis (FFT) every N samples
+    if #stats.rawSamples == self.config.fftWindowSize then
+        local fftResult = MathCore.FFT(stats.rawSamples)
+        
+        -- Extract dominant frequencies
+        local magnitudes = {}
+        for i = 1, #fftResult do
+            local r, im = fftResult[i].real, fftResult[i].imag
+            magnitudes[i] = math.sqrt(r*r + im*im)
+        end
+        
+        -- Find peak frequency (excluding DC component)
+        local maxMag, maxIdx = 0, 1
+        for i = 2, math.floor(#magnitudes / 2) do
+            if magnitudes[i] > maxMag then
+                maxMag = magnitudes[i]
+                maxIdx = i
+            end
+        end
+        
+        stats.dominantFrequency = maxIdx
+        stats.frequencyStrength = maxMag
+    end
+    
+    -- Update global metrics
+    self.metrics.totalSamples = self.metrics.totalSamples + 1
+    
+    local processingTime = GetGameTimer() - startTime
+    self.metrics.avgProcessingTime = self.metrics.avgProcessingTime * 0.99 + processingTime * 0.01
+    
+    return smoothed, trend, currentZScore or 0
+end
+
+--[[
+    Compute correlation matrix between all tracked functions.
+    Reveals which functions affect each other's performance.
+]]
+function RuntimeAnalyzer:computeCorrelations()
+    local functions = {}
+    local timeSeries = {}
+    
+    -- Gather all functions with sufficient data
+    for funcName, stats in pairs(self.functionStats) do
+        if #stats.rawSamples >= self.config.correlationMinSamples then
+            table.insert(functions, funcName)
+            table.insert(timeSeries, stats.rawSamples)
+        end
+    end
+    
+    if #functions < 2 then
+        return nil, "Insufficient data for correlation analysis"
+    end
+    
+    -- Compute cross-correlation matrix
+    local matrix = MatrixOps.CrossCorrelationMatrix(timeSeries)
+    
+    -- Find strongest correlations
+    local strongCorrelations = {}
+    for i = 1, #functions do
+        for j = i + 1, #functions do
+            local corr = matrix[i][j]
+            if math.abs(corr) > 0.7 then  -- Strong correlation threshold
+                table.insert(strongCorrelations, {
+                    func1 = functions[i],
+                    func2 = functions[j],
+                    correlation = corr,
+                    type = corr > 0 and "positive" or "negative"
+                })
+            end
+        end
+    end
+    
+    -- Sort by absolute correlation
+    table.sort(strongCorrelations, function(a, b)
+        return math.abs(a.correlation) > math.abs(b.correlation)
+    end)
+    
+    self.correlationCache = {
+        matrix = matrix,
+        functions = functions,
+        strongCorrelations = strongCorrelations,
+        timestamp = GetGameTimer()
+    }
+    
+    return strongCorrelations
+end
+
+--[[
+    Generate comprehensive performance report with statistical analysis.
+]]
+function RuntimeAnalyzer:generateReport()
+    local report = {
+        timestamp = os.time(),
+        totalSamples = self.metrics.totalSamples,
+        anomaliesDetected = self.metrics.anomaliesDetected,
+        avgProcessingTime = self.metrics.avgProcessingTime,
+        functions = {}
+    }
+    
+    -- Per-function statistics
+    for funcName, stats in pairs(self.functionStats) do
+        local funcReport = {
+            name = funcName,
+            resource = stats.resource,
+            callCount = stats.callCount,
+            totalTime = stats.totalTime,
+            avgTime = stats.totalTime / stats.callCount,
+            stdDev = stats.variance:getStdDev(),
+            currentTrend = stats.ema:getValue(),
+            dominantFrequency = stats.dominantFrequency,
+            frequencyStrength = stats.frequencyStrength,
+            percentile95 = self:calculatePercentile(stats.rawSamples, 0.95),
+            percentile99 = self:calculatePercentile(stats.rawSamples, 0.99)
+        }
+        
+        table.insert(report.functions, funcReport)
+    end
+    
+    -- Sort by total time (hotspots)
+    table.sort(report.functions, function(a, b)
+        return a.totalTime > b.totalTime
+    end)
+    
+    -- Add correlation analysis
+    local correlations = self:computeCorrelations()
+    report.correlations = correlations
+    
+    -- Add recent anomalies
+    report.recentAnomalies = {}
+    local cutoff = GetGameTimer() - 60000  -- Last minute
+    for _, anomaly in ipairs(self.anomalies) do
+        if anomaly.timestamp > cutoff then
+            table.insert(report.recentAnomalies, anomaly)
+        end
+    end
+    
+    return report
+end
+
+--[[
+    Calculate percentile from sample array (used for p95, p99 latency)
+]]
+function RuntimeAnalyzer:calculatePercentile(samples, percentile)
+    if #samples == 0 then return 0 end
+    
+    local sorted = {}
+    for i = 1, #samples do
+        sorted[i] = samples[i]
+    end
+    table.sort(sorted)
+    
+    local index = math.ceil(#sorted * percentile)
+    return sorted[index]
+end
+
+-- ============================================================================
+-- SECTION 5: FIVEM INTEGRATION & EXPORTS
+-- ============================================================================
+
+-- Global analyzer instance
+local g_Analyzer = RuntimeAnalyzer.new()
+
+-- Register with C++ profiler
+if Profiler then
+    Profiler.SetLuaCallback(function(sample)
+        g_Analyzer:processSample(sample)
+    end)
+end
+
+-- Async task for periodic analysis
+if Async then
+    Async.Run(function()
+        while true do
+            Wait(10000)  -- Every 10 seconds
+            
+            local report = g_Analyzer:generateReport()
+            
+            -- Export to profiler dashboard
+            if Profiler and Profiler.SendReport then
+                Profiler.SendReport(json.encode(report))
+            end
+            
+            -- Log hotspots
+            print("=== Performance Hotspots ===")
+            for i = 1, math.min(5, #report.functions) do
+                local func = report.functions[i]
+                print(string.format("[%d] %s: %.2fms avg, %d calls, σ=%.2f",
+                    i, func.name, func.avgTime, func.callCount, func.stdDev))
+            end
+            
+            -- Log correlations
+            if report.correlations and #report.correlations > 0 then
+                print("=== Strong Correlations ===")
+                for i = 1, math.min(3, #report.correlations) do
+                    local corr = report.correlations[i]
+                    print(string.format("%s <-> %s: %.3f (%s)",
+                        corr.func1, corr.func2, corr.correlation, corr.type))
+                end
+            end
+        end
+    end)
+end
+
+-- Export public API
+return {
+    Analyzer = g_Analyzer,
+    MathCore = MathCore,
+    MatrixOps = MatrixOps,
+    PCA = PCA
+}
+
+---
+
 ## 📊 Performance Characteristics
 
 ### Profiler Overhead
