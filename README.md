@@ -611,6 +611,7 @@ int lua_async_await(lua_State* L) {
 -- SECTION 1: MATHEMATICAL PRIMITIVES & STATISTICS CORE
 -- ============================================================================
 
+```lua
 local MathCore = {}
 
 --[[
@@ -1344,6 +1345,7 @@ return {
     MatrixOps = MatrixOps,
     PCA = PCA
 }
+```
 
 ---
 
